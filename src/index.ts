@@ -102,15 +102,17 @@ app.use((req: Request, res: Response) => {
  * Global Error Handler
  */
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  logger.error('Unhandled error:', err);
-
+  logger.error('Unhandled error:', {
+    message: err.message,
+    stack: err.stack,
+    name: err.name
+  });
+  
   res.status(500).json({
     error: 'Internal Server Error',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong',
-    timestamp: new Date().toISOString()
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
   });
 });
-
 /**
  * Start Server
  */
