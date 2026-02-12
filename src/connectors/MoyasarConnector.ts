@@ -41,7 +41,7 @@ export class MoyasarConnector {
         return config;
       },
       (error) => {
-        logger.error('Moyasar API Request Error:', error);
+        logger.error('Moyasar API Request Error:', { message: error.message });
         return Promise.reject(error);
       }
     );
@@ -52,7 +52,11 @@ export class MoyasarConnector {
         return response;
       },
       (error) => {
-        logger.error('Moyasar API Response Error:', error.response?.data || error.message);
+        logger.error('Moyasar API Response Error:', {
+          status: error.response?.status,
+          data: error.response?.data,
+          message: error.message
+        });
         return Promise.reject(error);
       }
     );
@@ -71,7 +75,11 @@ export class MoyasarConnector {
       
       return this.mapMoyasarResponse(response.data);
     } catch (error: any) {
-      logger.error('Moyasar createPayment error:', error);
+      logger.error('Moyasar createPayment error:', {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data
+      });
       throw this.handleError(error);
     }
   }
@@ -87,7 +95,10 @@ export class MoyasarConnector {
       
       return this.mapMoyasarResponse(response.data);
     } catch (error: any) {
-      logger.error('Moyasar getPayment error:', error);
+      logger.error('Moyasar getPayment error:', {
+        message: error.message,
+        status: error.response?.status
+      });
       throw this.handleError(error);
     }
   }
@@ -120,7 +131,10 @@ export class MoyasarConnector {
         created_at: response.data.created_at
       };
     } catch (error: any) {
-      logger.error('Moyasar refundPayment error:', error);
+      logger.error('Moyasar refundPayment error:', {
+        message: error.message,
+        status: error.response?.status
+      });
       throw this.handleError(error);
     }
   }
@@ -133,7 +147,10 @@ export class MoyasarConnector {
     try {
       await this.client.post(`/payments/${paymentId}/void`);
     } catch (error: any) {
-      logger.error('Moyasar voidPayment error:', error);
+      logger.error('Moyasar voidPayment error:', {
+        message: error.message,
+        status: error.response?.status
+      });
       throw this.handleError(error);
     }
   }
@@ -228,7 +245,7 @@ export class MoyasarConnector {
    * Handle and format errors from Moyasar API
    */
   private handleError(error: any): Error {
-    if (error.response) {
+    if (error.response?.data) {
       const moyasarError = error.response.data;
       const errorMessage = moyasarError.message || moyasarError.error || 'Unknown Moyasar error';
       const errorType = moyasarError.type || 'moyasar_error';
@@ -238,7 +255,7 @@ export class MoyasarConnector {
       return new Error(`Moyasar Error: ${errorMessage}`);
     }
     
-    return error;
+    return new Error(error.message || 'Moyasar API error');
   }
 
   /**
