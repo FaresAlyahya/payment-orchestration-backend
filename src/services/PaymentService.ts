@@ -48,7 +48,8 @@ export class PaymentService {
         amount: request.amount,
         currency: request.currency,
         status: pspResponse.status,
-payment_method: (request.source?.type as PaymentMethod) || PaymentMethod.CREDITCARD,        card_token: pspResponse.source?.token,
+        payment_method: (request.source?.type as PaymentMethod) || PaymentMethod.CREDITCARD,
+        card_token: pspResponse.source?.token,
         card_brand: pspResponse.source?.company,
         card_last_four: pspResponse.source?.number?.slice(-4),
         description: request.description,
@@ -65,8 +66,16 @@ payment_method: (request.source?.type as PaymentMethod) || PaymentMethod.CREDITC
         id: transaction.id // Return our internal transaction ID
       };
     } catch (error: any) {
-      logger.error('Error creating payment:', error);
-      throw new Error(`Failed to create payment: ${error.message}`);
+      logger.error('Error creating payment:', {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data
+      });
+      throw new Error(
+        error.response?.data?.message || 
+        error.message || 
+        'Failed to create payment'
+      );
     }
   }
 
@@ -98,7 +107,9 @@ payment_method: (request.source?.type as PaymentMethod) || PaymentMethod.CREDITC
         id: transaction.id
       };
     } catch (error: any) {
-      logger.error('Error getting payment:', error);
+      logger.error('Error getting payment:', {
+        message: error.message
+      });
       throw new Error(`Failed to get payment: ${error.message}`);
     }
   }
@@ -143,8 +154,15 @@ payment_method: (request.source?.type as PaymentMethod) || PaymentMethod.CREDITC
 
       return refundResponse;
     } catch (error: any) {
-      logger.error('Error refunding payment:', error);
-      throw new Error(`Failed to refund payment: ${error.message}`);
+      logger.error('Error refunding payment:', {
+        message: error.message,
+        status: error.response?.status
+      });
+      throw new Error(
+        error.response?.data?.message || 
+        error.message || 
+        'Failed to refund payment'
+      );
     }
   }
 
