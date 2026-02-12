@@ -37,11 +37,14 @@ export class PaymentController {
         data: payment
       });
     } catch (error: any) {
-      logger.error('Error in createPayment controller:', error);
+      logger.error('Error in createPayment controller:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
       res.status(500).json({
         success: false,
         error: 'Failed to create payment',
-        message: error.message
+        message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   };
@@ -56,17 +59,16 @@ export class PaymentController {
 
       const payment = await this.paymentService.getPayment(id);
 
-      // Security: Ensure the transaction belongs to the requesting merchant
-      // (This check would be in the service layer in production)
-
       res.status(200).json({
         success: true,
         data: payment
       });
     } catch (error: any) {
-      logger.error('Error in getPayment controller:', error);
+      logger.error('Error in getPayment controller:', {
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
       
-      if (error.message.includes('not found')) {
+      if (error instanceof Error && error.message.includes('not found')) {
         res.status(404).json({
           success: false,
           error: 'Payment not found'
@@ -77,7 +79,7 @@ export class PaymentController {
       res.status(500).json({
         success: false,
         error: 'Failed to get payment',
-        message: error.message
+        message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   };
@@ -100,9 +102,11 @@ export class PaymentController {
         data: refund
       });
     } catch (error: any) {
-      logger.error('Error in refundPayment controller:', error);
+      logger.error('Error in refundPayment controller:', {
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
 
-      if (error.message.includes('not found')) {
+      if (error instanceof Error && error.message.includes('not found')) {
         res.status(404).json({
           success: false,
           error: 'Payment not found'
@@ -110,7 +114,7 @@ export class PaymentController {
         return;
       }
 
-      if (error.message.includes('Only paid transactions')) {
+      if (error instanceof Error && error.message.includes('Only paid transactions')) {
         res.status(400).json({
           success: false,
           error: 'Invalid payment status for refund',
@@ -122,7 +126,7 @@ export class PaymentController {
       res.status(500).json({
         success: false,
         error: 'Failed to refund payment',
-        message: error.message
+        message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   };
@@ -148,11 +152,13 @@ export class PaymentController {
         count: transactions.length
       });
     } catch (error: any) {
-      logger.error('Error in listPayments controller:', error);
+      logger.error('Error in listPayments controller:', {
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
       res.status(500).json({
         success: false,
         error: 'Failed to list payments',
-        message: error.message
+        message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   };
