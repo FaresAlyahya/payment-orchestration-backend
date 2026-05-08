@@ -45,9 +45,6 @@ export class Transaction {
   payment_method: PaymentMethod;
 
   @Column({ nullable: true })
-  card_token: string;
-
-  @Column({ nullable: true })
   card_brand: string;
 
   @Column({ nullable: true })

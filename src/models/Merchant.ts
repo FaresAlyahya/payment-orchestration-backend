@@ -14,7 +14,10 @@ export class Merchant {
 
   @Column({ unique: true })
   @Index()
-  api_key: string;
+  api_key_prefix: string;
+
+  @Column()
+  api_key_hash: string;
 
   @Column({ nullable: true })
   webhook_url: string;

@@ -28,55 +28,64 @@ export class PaymentService {
    * Create a new payment through the orchestration platform
    */
   async createPayment(merchantId: string, request: PaymentRequest): Promise<PaymentResponse> {
+    const selectedPSP = await this.selectPSP(request);
+    const connector = this.getPSPConnector(selectedPSP);
+
+    // Pre-save a PENDING record before calling the PSP.
+    // This guarantees a local record exists even if the PSP call succeeds
+    // but the subsequent DB update fails — enabling reconciliation either way.
+    const transaction = this.transactionRepository.create({
+      merchant_id: merchantId,
+      psp_provider: selectedPSP,
+      amount: request.amount,
+      currency: request.currency,
+      status: PaymentStatus.PENDING,
+      payment_method: (request.source?.type as PaymentMethod) || PaymentMethod.CREDITCARD,
+      description: request.description,
+      metadata: request.metadata,
+      callback_url: request.callback_url
+    });
+    await this.transactionRepository.save(transaction);
+
+    logger.info(`Creating payment via ${selectedPSP} for merchant ${merchantId} [txn: ${transaction.id}]`);
+
+    // Call the PSP — this cannot be wrapped in a DB transaction because
+    // external HTTP calls can't be rolled back.
+    let pspResponse: PaymentResponse;
     try {
-      // Step 1: Determine which PSP to use (routing logic)
-      const selectedPSP = await this.selectPSP(request);
-      
-      logger.info(`Creating payment via ${selectedPSP} for merchant ${merchantId}`);
-
-      // Step 2: Get the appropriate PSP connector
-      const connector = this.getPSPConnector(selectedPSP);
-
-      // Step 3: Create payment with the selected PSP
-      const pspResponse = await connector.createPayment(request);
-
-      // Step 4: Save transaction to database
-      const transaction = this.transactionRepository.create({
-        merchant_id: merchantId,
-        psp_provider: selectedPSP,
-        psp_transaction_id: pspResponse.id,
-        amount: request.amount,
-        currency: request.currency,
-        status: pspResponse.status,
-        payment_method: (request.source?.type as PaymentMethod) || PaymentMethod.CREDITCARD,
-        card_token: pspResponse.source?.token,
-        card_brand: pspResponse.source?.company,
-        card_last_four: pspResponse.source?.number?.slice(-4),
-        description: request.description,
-        metadata: request.metadata,
-        callback_url: request.callback_url
-      });
-
+      pspResponse = await connector.createPayment(request);
+    } catch (pspError: any) {
+      // PSP rejected the payment — mark our record FAILED and surface the error.
+      transaction.status = PaymentStatus.FAILED;
+      transaction.error_message = pspError.response?.data?.message || pspError.message;
       await this.transactionRepository.save(transaction);
 
-      logger.info(`Payment created successfully: ${transaction.id}`);
-
-      return {
-        ...pspResponse,
-        id: transaction.id // Return our internal transaction ID
-      };
-    } catch (error: any) {
-      logger.error('Error creating payment:', {
-        message: error.message,
-        status: error.response?.status,
-        data: error.response?.data
-      });
-      throw new Error(
-        error.response?.data?.message || 
-        error.message || 
-        'Failed to create payment'
-      );
+      throw new Error(transaction.error_message || 'Failed to create payment');
     }
+
+    // Update the pre-created record with the PSP result.
+    try {
+      transaction.psp_transaction_id = pspResponse.id;
+      transaction.status = pspResponse.status;
+      transaction.card_brand = pspResponse.source?.company;
+      transaction.card_last_four = pspResponse.source?.number?.slice(-4);
+      await this.transactionRepository.save(transaction);
+    } catch (dbError: any) {
+      // The payment went through at the PSP but we couldn't persist the result.
+      // The PENDING record (id: transaction.id) + PSP id below are sufficient
+      // for automated or manual reconciliation.
+      logger.error('CRITICAL: PSP payment created but DB update failed — reconciliation required', {
+        internal_transaction_id: transaction.id,
+        psp_transaction_id: pspResponse.id,
+        psp_provider: selectedPSP,
+        merchant_id: merchantId,
+        error: dbError.message
+      });
+      // Still return success — the payment did go through at the PSP.
+    }
+
+    logger.info(`Payment created: internal=${transaction.id} psp=${pspResponse.id}`);
+    return { ...pspResponse, id: transaction.id };
   }
 
   /**

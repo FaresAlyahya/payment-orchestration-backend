@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import bcrypt from 'bcrypt';
 import { AppDataSource } from '../config/database';
 import { Merchant } from '../models/Merchant';
 import { logger } from '../utils/logger';
@@ -34,14 +35,19 @@ export const authenticateApiKey = async (
 
     const apiKey = authHeader.substring(7); // Remove 'Bearer ' prefix
 
-    // Find merchant by API key
+    // Look up merchant by key prefix, then verify the full key against the stored hash
+    const apiKeyPrefix = apiKey.substring(0, 8);
     const merchantRepository = AppDataSource.getRepository(Merchant);
     const merchant = await merchantRepository.findOne({
-      where: { api_key: apiKey }
+      where: { api_key_prefix: apiKeyPrefix }
     });
 
-    if (!merchant) {
-      logger.warn(`Invalid API key attempt: ${apiKey.substring(0, 10)}...`);
+    const isValidKey = merchant
+      ? await bcrypt.compare(apiKey, merchant.api_key_hash)
+      : false;
+
+    if (!merchant || !isValidKey) {
+      logger.warn('Invalid API key attempt');
       res.status(401).json({
         error: 'Unauthorized',
         message: 'Invalid API key'

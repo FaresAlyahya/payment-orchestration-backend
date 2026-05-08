@@ -7,6 +7,7 @@ import * as dotenv from 'dotenv';
 import apiRoutes from './routes/api.routes';
 import { logger } from './utils/logger';
 import { initializeDatabase } from './config/database';
+import { webhookQueue } from './services/WebhookQueue';
 
 // Load environment variables
 dotenv.config();
@@ -23,9 +24,24 @@ app.use(helmet()); // Security headers
 /**
  * CORS Configuration
  */
-const allowedOrigins = ['*'];
+const allowedOrigins = [
+  ...(process.env.ALLOWED_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean),
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL.trim()] : [])
+];
+
 app.use(cors({
-  origin: '*',
+  origin: (origin, callback) => {
+    // Allow server-to-server requests (no origin header)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    }
+  },
   credentials: true
 }));
 
@@ -120,6 +136,9 @@ const startServer = async (): Promise<void> => {
   try {
     // Initialize database
     await initializeDatabase();
+
+    // Re-queue any webhook deliveries left pending from a previous run
+    await webhookQueue.processOrphanedDeliveries();
 
     // Start listening
     app.listen(PORT, () => {

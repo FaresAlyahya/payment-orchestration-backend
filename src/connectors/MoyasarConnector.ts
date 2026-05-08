@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import axios, { AxiosInstance } from 'axios';
 import {
   PaymentRequest,
@@ -265,12 +266,14 @@ export class MoyasarConnector {
    * @param secret Your webhook secret
    */
   static verifyWebhookSignature(payload: string, signature: string, secret: string): boolean {
-    const crypto = require('crypto');
-    const hmac = crypto.createHmac('sha256', secret);
-    hmac.update(payload);
-    const calculatedSignature = hmac.digest('hex');
-    
-    return calculatedSignature === signature;
+    const calculatedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(payload)
+      .digest('hex');
+    return crypto.timingSafeEqual(
+      Buffer.from(calculatedSignature, 'hex'),
+      Buffer.from(signature, 'hex')
+    );
   }
 
   /**
