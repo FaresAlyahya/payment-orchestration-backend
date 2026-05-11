@@ -46,15 +46,41 @@ export const authenticateApiKey = async (
 
     const apiKey = authHeader.substring(7); // Remove 'Bearer ' prefix
 
+    // DEBUG: log only the first 8 chars — enough to identify the key without exposing it
+    logger.info('[auth] Key prefix received', {
+      key_prefix: apiKey.substring(0, 8),
+      request_id: req.requestId
+    });
+
     const merchantRepository = AppDataSource.getRepository(Merchant);
     const allMerchants = await merchantRepository.find();
+
+    logger.info('[auth] Merchants loaded from DB', {
+      count: allMerchants.length,
+      request_id: req.requestId
+    });
 
     // Find the merchant whose stored bcrypt hash matches the provided key.
     // bcrypt.compare is intentionally slow — avoid calling it in a loop for
     // large datasets. Use an api_key_prefix index column when scaling up.
     let matchedMerchant: Merchant | null = null;
     for (const candidate of allMerchants) {
-      const isMatch = await bcrypt.compare(apiKey, candidate.api_key);
+      let isMatch = false;
+      try {
+        isMatch = await bcrypt.compare(apiKey, candidate.api_key);
+      } catch (bcryptErr: any) {
+        logger.error('[auth] bcrypt.compare threw an error', {
+          merchant_id: candidate.id,
+          error: bcryptErr.message,
+          request_id: req.requestId
+        });
+      }
+      logger.info('[auth] bcrypt.compare result', {
+        merchant_id: candidate.id,
+        matched: isMatch,
+        hash_prefix: candidate.api_key.substring(0, 7), // shows e.g. "$2b$10$"
+        request_id: req.requestId
+      });
       if (isMatch) {
         matchedMerchant = candidate;
         break;
@@ -66,6 +92,8 @@ export const authenticateApiKey = async (
     if (!matchedMerchant) {
       const dummyHash = '$2b$12$invalidhashfortimingprotectiononly000000000000000000000';
       await bcrypt.compare(apiKey, dummyHash).catch(() => {});
+
+      logger.info('[auth] No matching merchant found', { request_id: req.requestId });
 
       logger.warn('Invalid API key attempt', { request_id: req.requestId });
       res.status(401).json({
