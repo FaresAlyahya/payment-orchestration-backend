@@ -18,12 +18,14 @@ declare global {
  *
  * Authentication flow:
  *  1. Extract API key from `Authorization: Bearer <key>` header.
- *  2. Use the first 8 characters (prefix) as an index lookup to find the merchant.
- *     This avoids a full-table scan while never exposing the full key in the DB.
- *  3. Use bcrypt.compare() to verify the full key against the stored hash.
- *  4. Reject if the key has expired (api_key_expires_at in the past).
- *  5. Reject if the merchant account is inactive.
- *  6. Attach the merchant object to req.merchant for downstream handlers.
+ *  2. Load all merchants and use bcrypt.compare() to find a matching api_key hash.
+ *  3. Reject if the key has expired (api_key_expires_at in the past).
+ *  4. Reject if the merchant account is inactive.
+ *  5. Attach the merchant object to req.merchant for downstream handlers.
+ *
+ * NOTE: This performs a full-table scan with a bcrypt comparison per row.
+ * This is only acceptable for a small number of merchants. Add an api_key_prefix
+ * indexed column for fast lookup when merchant count grows.
  */
 export const authenticateApiKey = async (
   req: Request,
@@ -44,21 +46,27 @@ export const authenticateApiKey = async (
 
     const apiKey = authHeader.substring(7); // Remove 'Bearer ' prefix
 
-    // Fast prefix-based lookup — avoids scanning the full api_key_hash column
-    const apiKeyPrefix = apiKey.substring(0, 8);
     const merchantRepository = AppDataSource.getRepository(Merchant);
-    const merchant = await merchantRepository.findOne({
-      where: { api_key_prefix: apiKeyPrefix }
-    });
+    const allMerchants = await merchantRepository.find();
 
-    // Always run bcrypt.compare even when merchant is null (constant-time guard
-    // prevents prefix-based enumeration via timing differences)
-    const dummyHash = '$2b$12$invalidhashfortimingprotectiononly000000000000000000000';
-    const isValidKey = merchant
-      ? await bcrypt.compare(apiKey, merchant.api_key_hash)
-      : await bcrypt.compare(apiKey, dummyHash).then(() => false);
+    // Find the merchant whose stored bcrypt hash matches the provided key.
+    // bcrypt.compare is intentionally slow — avoid calling it in a loop for
+    // large datasets. Use an api_key_prefix index column when scaling up.
+    let matchedMerchant: Merchant | null = null;
+    for (const candidate of allMerchants) {
+      const isMatch = await bcrypt.compare(apiKey, candidate.api_key);
+      if (isMatch) {
+        matchedMerchant = candidate;
+        break;
+      }
+    }
 
-    if (!merchant || !isValidKey) {
+    // Timing-attack protection: if no merchant found, run one dummy bcrypt
+    // comparison so the response time doesn't reveal whether the prefix exists.
+    if (!matchedMerchant) {
+      const dummyHash = '$2b$12$invalidhashfortimingprotectiononly000000000000000000000';
+      await bcrypt.compare(apiKey, dummyHash).catch(() => {});
+
       logger.warn('Invalid API key attempt', { request_id: req.requestId });
       res.status(401).json({
         error: 'Unauthorized',
@@ -67,11 +75,11 @@ export const authenticateApiKey = async (
       return;
     }
 
-    // Reject expired keys (api_key_expires_at is set during key rotation)
-    if (merchant.api_key_expires_at && merchant.api_key_expires_at < new Date()) {
+    // Reject expired keys
+    if (matchedMerchant.api_key_expires_at && matchedMerchant.api_key_expires_at < new Date()) {
       logger.warn('Expired API key attempt', {
-        merchant_id: merchant.id,
-        expired_at: merchant.api_key_expires_at,
+        merchant_id: matchedMerchant.id,
+        expired_at: matchedMerchant.api_key_expires_at,
         request_id: req.requestId
       });
       res.status(401).json({
@@ -81,9 +89,9 @@ export const authenticateApiKey = async (
       return;
     }
 
-    if (!merchant.active) {
+    if (!matchedMerchant.active) {
       logger.warn('Inactive merchant attempt', {
-        merchant_id: merchant.id,
+        merchant_id: matchedMerchant.id,
         request_id: req.requestId
       });
       res.status(403).json({
@@ -94,11 +102,11 @@ export const authenticateApiKey = async (
     }
 
     // Attach merchant to request for downstream use
-    req.merchant = merchant;
+    req.merchant = matchedMerchant;
 
     logger.info('API request authenticated', {
-      merchant_id: merchant.id,
-      merchant_name: merchant.name,
+      merchant_id: matchedMerchant.id,
+      merchant_name: matchedMerchant.name,
       request_id: req.requestId
     });
 

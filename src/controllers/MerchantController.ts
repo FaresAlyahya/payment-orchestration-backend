@@ -38,12 +38,10 @@ export class MerchantController {
 
       // Generate a cryptographically secure random API key (80 hex chars = 320 bits)
       const rawKey = crypto.randomBytes(40).toString('hex');
-      const newApiKeyPrefix = rawKey.substring(0, 8);
       const newApiKeyHash = await bcrypt.hash(rawKey, BCRYPT_ROUNDS);
 
       // Overwrite the current key; clear any prior expiry so the new key is permanent
-      merchant.api_key_prefix = newApiKeyPrefix;
-      merchant.api_key_hash = newApiKeyHash;
+      merchant.api_key = newApiKeyHash;
       merchant.api_key_expires_at = null;
 
       await merchantRepository.save(merchant);
@@ -61,8 +59,7 @@ export class MerchantController {
         data: {
           // The plaintext key is returned exactly once; after this response it
           // is unrecoverable (only the bcrypt hash is stored)
-          api_key: rawKey,
-          api_key_prefix: newApiKeyPrefix
+          api_key: rawKey
         }
       });
     } catch (error: any) {

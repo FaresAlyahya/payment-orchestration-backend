@@ -12,12 +12,17 @@ export class Merchant {
   @Index()
   email: string;
 
+  /**
+   * Bcrypt hash of the merchant's API key.
+   * The plaintext key is never stored — only this hash is used for verification.
+   *
+   * TODO: Add an api_key_prefix column (first 8 chars, plain text) to enable
+   * fast indexed lookup and avoid a full-table bcrypt scan on every request.
+   * Currently all merchants are loaded and compared sequentially, which is
+   * only acceptable for a very small number of merchants.
+   */
   @Column({ unique: true })
-  @Index()
-  api_key_prefix: string;
-
-  @Column()
-  api_key_hash: string;
+  api_key: string;
 
   /**
    * Optional expiry for the current API key (UTC).  Null means the key never
