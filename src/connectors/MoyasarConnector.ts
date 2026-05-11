@@ -53,9 +53,12 @@ export class MoyasarConnector {
         return response;
       },
       (error) => {
+        // Only log safe error metadata — never log raw response bodies which
+        // may contain card data echoed back in validation error messages.
         logger.error('Moyasar API Response Error:', {
           status: error.response?.status,
-          data: error.response?.data,
+          error_type: error.response?.data?.type,
+          error_message: error.response?.data?.message,
           message: error.message
         });
         return Promise.reject(error);
@@ -76,10 +79,12 @@ export class MoyasarConnector {
       
       return this.mapMoyasarResponse(response.data);
     } catch (error: any) {
+      // Do NOT log the request payload — it contains card numbers / CVC
       logger.error('Moyasar createPayment error:', {
-        message: error.message,
         status: error.response?.status,
-        data: error.response?.data
+        error_type: error.response?.data?.type,
+        error_message: error.response?.data?.message,
+        message: error.message
       });
       throw this.handleError(error);
     }
@@ -197,24 +202,34 @@ export class MoyasarConnector {
   }
 
   /**
-   * Map Moyasar response to our unified format
+   * Map Moyasar response to our unified format.
+   *
+   * Security note: Moyasar returns a masked card number (e.g. "XXXX XXXX XXXX 1234").
+   * We store only the last-four digits and card brand — never the full or partially
+   * masked number — to minimise sensitive data surface in our DB and logs.
    */
   private mapMoyasarResponse(moyasarPayment: any): PaymentResponse {
+    const rawNumber: string | undefined = moyasarPayment.source?.number;
+    // Extract only the last 4 digits from whatever masked format Moyasar returns
+    const lastFour = rawNumber ? rawNumber.replace(/\D/g, '').slice(-4) : undefined;
+
     return {
       id: moyasarPayment.id,
       status: this.mapStatus(moyasarPayment.status),
       amount: moyasarPayment.amount / 100, // Convert from halalas to SAR
       currency: moyasarPayment.currency,
       fee: moyasarPayment.fee ? moyasarPayment.fee / 100 : undefined,
-      source: moyasarPayment.source ? {
-        type: moyasarPayment.source.type,
-        company: moyasarPayment.source.company,
-        name: moyasarPayment.source.name,
-        number: moyasarPayment.source.number,
-        gateway_id: moyasarPayment.source.gateway_id,
-        reference_number: moyasarPayment.source.reference_number,
-        token: moyasarPayment.source.token
-      } : undefined,
+      source: moyasarPayment.source
+        ? {
+            type: moyasarPayment.source.type,
+            company: moyasarPayment.source.company,
+            // Only expose last-four — never the full or masked card number
+            number: lastFour ? `****${lastFour}` : undefined,
+            gateway_id: moyasarPayment.source.gateway_id,
+            reference_number: moyasarPayment.source.reference_number,
+            token: moyasarPayment.source.token
+          }
+        : undefined,
       created_at: moyasarPayment.created_at,
       updated_at: moyasarPayment.updated_at,
       description: moyasarPayment.description,

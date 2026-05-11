@@ -37,10 +37,16 @@ services:
       MOYASAR_API_KEY: ${MOYASAR_API_KEY}
       MOYASAR_API_URL: https://api.moyasar.com/v1
       LOG_LEVEL: info
+      # Redis for distributed rate limiting
+      REDIS_URL: redis://redis:6379
+      # Allowed browser origins (comma-separated)
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
     ports:
       - "3000:3000"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - ./logs:/app/logs
