@@ -182,13 +182,14 @@ export class MoyasarConnector {
         };
       } else if (request.source.number) {
         // Use card details directly
+        // Moyasar requires month and year as strings ("12", "2027")
         payload.source = {
           type: request.source.type,
           name: request.source.name,
           number: request.source.number,
-          month: request.source.month,
-          year: request.source.year,
-          cvc: request.source.cvc
+          month: String(request.source.month),
+          year: String(request.source.year),
+          cvc: String(request.source.cvc)
         };
       }
     }
