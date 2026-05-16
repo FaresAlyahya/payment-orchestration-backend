@@ -1,0 +1,34 @@
+version: 1.0
+
+runtime: DOCKER   # Deploy from Dockerfile (push image to ECR first)
+
+build:
+  commands:
+    build:
+      - echo "Building Docker image..."
+
+run:
+  # App Runner will use the CMD in your Dockerfile (node dist/index.js)
+  # Environment variables are set in the App Runner service console or via
+  # aws apprunner update-service — do NOT hardcode secrets here.
+  runtime-version: "20"
+  port: 3000
+  env:
+    - name: NODE_ENV
+      value: production
+    - name: PORT
+      value: "3000"
+    - name: API_VERSION
+      value: v1
+    # Secrets (DATABASE_URL, MOYASAR_API_KEY, JWT_SECRET, etc.) must be
+    # configured in the App Runner console under "Environment variables"
+    # or injected via AWS Secrets Manager — never committed to source control.
+
+  # App Runner calls /health before sending traffic; must return HTTP 200
+  healthCheckConfiguration:
+    protocol: HTTP
+    path: /health
+    interval: 10
+    timeout: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 3
