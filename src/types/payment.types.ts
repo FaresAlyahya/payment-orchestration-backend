@@ -20,6 +20,7 @@ export enum PaymentMethod {
 
 export enum PSPProvider {
   MOYASAR = 'moyasar',
+  PAYTABS = 'paytabs',
   HYPERPAY = 'hyperpay',
   TAP = 'tap',
   CHECKOUT = 'checkout'

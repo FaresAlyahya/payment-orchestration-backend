@@ -1,6 +1,7 @@
 import { AppDataSource } from '../config/database';
 import { Transaction } from '../models/Transaction';
 import { MoyasarConnector } from '../connectors/MoyasarConnector';
+import { PayTabsConnector } from '../connectors/PayTabsConnector';
 import {
   PaymentRequest,
   PaymentResponse,
@@ -15,13 +16,19 @@ import { logger } from '../utils/logger';
 export class PaymentService {
   private transactionRepository = AppDataSource.getRepository(Transaction);
   private moyasarConnector: MoyasarConnector;
+  private payTabsConnector: PayTabsConnector;
 
   constructor() {
-    // Initialize Moyasar connector
-    const moyasarApiKey = process.env.MOYASAR_API_KEY || '';
-    const moyasarApiUrl = process.env.MOYASAR_API_URL || 'https://api.moyasar.com/v1';
-    
-    this.moyasarConnector = new MoyasarConnector(moyasarApiKey, moyasarApiUrl);
+    this.moyasarConnector = new MoyasarConnector(
+      process.env.MOYASAR_API_KEY || '',
+      process.env.MOYASAR_API_URL || 'https://api.moyasar.com/v1'
+    );
+
+    this.payTabsConnector = new PayTabsConnector(
+      process.env.PAYTABS_SERVER_KEY || '',
+      parseInt(process.env.PAYTABS_PROFILE_ID || '0'),
+      process.env.PAYTABS_API_URL || 'https://secure.paytabs.sa'
+    );
   }
 
   /**
@@ -200,15 +207,12 @@ export class PaymentService {
   /**
    * Get the appropriate PSP connector based on provider
    */
-  private getPSPConnector(provider: PSPProvider): MoyasarConnector {
+  private getPSPConnector(provider: PSPProvider): MoyasarConnector | PayTabsConnector {
     switch (provider) {
       case PSPProvider.MOYASAR:
         return this.moyasarConnector;
-      // Add other PSPs here as you integrate them
-      // case PSPProvider.HYPERPAY:
-      //   return this.hyperpayConnector;
-      // case PSPProvider.TAP:
-      //   return this.tapConnector;
+      case PSPProvider.PAYTABS:
+        return this.payTabsConnector;
       default:
         throw new Error(`Unsupported PSP provider: ${provider}`);
     }
