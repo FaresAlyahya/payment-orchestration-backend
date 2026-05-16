@@ -72,6 +72,8 @@ export interface PaymentResponse {
   description?: string;
   metadata?: Record<string, any>;
   callback_url?: string;
+  /** Hosted payment page URL — present when the PSP uses a redirect flow (e.g. PayTabs) */
+  payment_url?: string;
 }
 
 export interface RefundRequest {

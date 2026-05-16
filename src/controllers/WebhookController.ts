@@ -117,6 +117,78 @@ export class WebhookController {
   }
 
   /**
+   * POST /webhooks/paytabs
+   *
+   * PayTabs POSTs the payment result to PAYTABS_CALLBACK_URL after the
+   * customer completes (or abandons) the hosted payment page.
+   *
+   * Payload fields used:
+   *  tran_ref                        — PayTabs transaction reference (our psp_transaction_id)
+   *  payment_result.response_status  — A=Paid, D=Declined, E=Error, V=Voided
+   *  payment_result.response_message — human-readable result
+   *  cart_amount / cart_currency     — for refund amount comparison
+   *
+   * PayTabs does not send an HMAC signature by default on the callback. We
+   * verify by checking the profile_id matches our configured value, and
+   * optionally re-query PayTabs to confirm status before updating the DB.
+   */
+  handlePayTabsWebhook = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const data = req.body;
+
+      // Basic integrity check — reject if profile_id doesn't match ours
+      const expectedProfileId = parseInt(process.env.PAYTABS_PROFILE_ID || '0');
+      if (expectedProfileId && data.merchant_info?.profile_id !== expectedProfileId) {
+        logger.warn('PayTabs webhook profile_id mismatch', {
+          received: data.merchant_info?.profile_id,
+          expected: expectedProfileId
+        });
+        res.status(401).json({ error: 'Invalid profile_id' });
+        return;
+      }
+
+      const tranRef: string = data.tran_ref;
+      const responseStatus: string = data.payment_result?.response_status;
+
+      logger.info(`PayTabs webhook received: tran_ref=${tranRef} status=${responseStatus}`);
+
+      const transaction = await this.transactionRepository.findOne({
+        where: { psp_transaction_id: tranRef }
+      });
+
+      if (!transaction) {
+        logger.warn(`PayTabs webhook: no transaction found for tran_ref=${tranRef}`);
+        res.status(200).json({ received: true }); // Acknowledge to stop retries
+        return;
+      }
+
+      if (responseStatus === 'A') {
+        transaction.status = PaymentStatus.PAID;
+        await this.transactionRepository.save(transaction);
+        logger.info(`Transaction ${transaction.id} marked as PAID via PayTabs`);
+        await this.notifyMerchant(transaction, 'payment.paid', data);
+      } else if (responseStatus === 'D' || responseStatus === 'E') {
+        transaction.status = PaymentStatus.FAILED;
+        transaction.error_message = data.payment_result?.response_message || 'Payment failed';
+        await this.transactionRepository.save(transaction);
+        logger.info(`Transaction ${transaction.id} marked as FAILED via PayTabs`);
+        await this.notifyMerchant(transaction, 'payment.failed', data);
+      } else if (responseStatus === 'V') {
+        transaction.status = PaymentStatus.VOIDED;
+        await this.transactionRepository.save(transaction);
+        logger.info(`Transaction ${transaction.id} marked as VOIDED via PayTabs`);
+      } else {
+        logger.info(`PayTabs webhook: unhandled status ${responseStatus} for tran_ref=${tranRef}`);
+      }
+
+      res.status(200).json({ received: true });
+    } catch (error: any) {
+      logger.error('Error handling PayTabs webhook:', error);
+      res.status(500).json({ error: 'Webhook processing failed' });
+    }
+  };
+
+  /**
    * Look up the merchant and enqueue a webhook delivery.
    * Failures are handled by WebhookQueue with retries — do not throw here.
    */

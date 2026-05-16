@@ -92,11 +92,9 @@ router.post(
 );
 
 /**
- * Webhook Routes (public — no API key auth, verified by HMAC signature)
+ * Webhook Routes (public — no API key auth, verified per-PSP)
  */
-router.post(
-  '/webhooks/moyasar',
-  webhookController.handleMoyasarWebhook
-);
+router.post('/webhooks/moyasar', webhookController.handleMoyasarWebhook);
+router.post('/webhooks/paytabs', webhookController.handlePayTabsWebhook);
 
 export default router;
