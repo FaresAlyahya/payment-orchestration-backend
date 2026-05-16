@@ -183,24 +183,26 @@ export class PaymentService {
   }
 
   /**
-   * Smart routing logic to select the best PSP
-   * This is a simplified version - you can enhance it based on your routing rules
+   * Select which PSP to route this payment through.
+   *
+   * Priority:
+   *  1. Explicit `psp` field in the request — merchant forces a specific provider
+   *  2. Card-type rules (Mada → Moyasar)
+   *  3. Default fallback (Moyasar)
    */
   private async selectPSP(request: PaymentRequest): Promise<PSPProvider> {
-    // For MVP, we'll use Moyasar as default
-    // In production, you would:
-    // 1. Check routing rules from database
-    // 2. Consider card type (Mada vs international)
-    // 3. Check PSP success rates
-    // 4. Consider fees
-    // 5. Implement failover logic
+    // 1. Honour explicit PSP override
+    if (request.psp) {
+      logger.info(`PSP override requested: ${request.psp}`);
+      return request.psp;
+    }
 
-    // Simple example: Route Mada cards to Moyasar
+    // 2. Card-type routing rules
     if (request.source?.type === 'mada') {
       return PSPProvider.MOYASAR;
     }
 
-    // Default to Moyasar
+    // 3. Default
     return PSPProvider.MOYASAR;
   }
 

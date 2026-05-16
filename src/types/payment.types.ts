@@ -39,6 +39,7 @@ export interface PaymentRequest {
   callback_url?: string;
   source?: PaymentSource;
   metadata?: Record<string, any>;
+  psp?: PSPProvider; // Optional: force a specific PSP, overrides routing logic
 }
 
 export interface PaymentSource {
