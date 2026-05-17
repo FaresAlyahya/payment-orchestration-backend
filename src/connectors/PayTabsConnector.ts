@@ -12,14 +12,28 @@ import {
 import { logger } from '../utils/logger';
 
 /**
- * PayTabs Payment Gateway Connector — Hosted Payment Page flow
+ * PayTabs Payment Gateway Connector
  * Docs: https://site.paytabs.com/en/pt2-documentation/
  *
- * Flow:
- *  1. POST /payment/request  → PayTabs returns a redirect_url (hosted page)
- *  2. Client opens redirect_url and completes payment on PayTabs' page
- *  3. PayTabs POSTs the result to our PAYTABS_CALLBACK_URL (webhook)
- *  4. We update the transaction status from the webhook
+ * Supports two integration flows — selected automatically based on the request:
+ *
+ * ── Flow A: Token (Merchant Page / unified checkout) ─────────────────────────
+ *  Frontend includes the PayTabs JavaScript SDK and renders its own card form.
+ *  The SDK tokenises the card client-side and returns a payment_token.
+ *  Frontend sends { source: { token: "PAYMENT_TOKEN" } } to our backend.
+ *  Backend charges the token directly — no browser redirect needed.
+ *
+ *  Frontend setup:
+ *    <script src="https://secure.paytabs.sa/payment/js/paylib.js"></script>
+ *    paylib.init({ key: "YOUR_CLIENT_KEY" });
+ *    paylib.tokenise(formElement, function(response) {
+ *      // response.token → send to backend as source.token
+ *    });
+ *
+ * ── Flow B: Hosted Page (fallback when no token) ─────────────────────────────
+ *  Backend requests a hosted page from PayTabs and returns redirect_url.
+ *  Frontend redirects the customer to that URL.
+ *  PayTabs POSTs the result to PAYTABS_CALLBACK_URL (our webhook).
  *
  * Authentication: Server Key in the `authorization` header.
  */
@@ -71,12 +85,30 @@ export class PayTabsConnector {
   }
 
   /**
-   * Request a hosted payment page from PayTabs.
+   * Create a payment via PayTabs.
    *
-   * Returns a PaymentResponse where `payment_url` is the URL the client must
-   * open to complete payment. Status is PENDING until PayTabs sends a webhook.
+   * When source.token is present (Flow A — unified checkout):
+   *   Charges the card token directly. Returns the final payment status
+   *   immediately with no browser redirect required.
+   *
+   * When no token is present (Flow B — hosted page fallback):
+   *   Requests a PayTabs-hosted payment page and returns payment_url.
+   *   The frontend must redirect the customer to that URL.
    */
   async createPayment(request: PaymentRequest): Promise<PaymentResponse> {
+    if (request.source?.token) {
+      return this.createTokenPayment(request);
+    }
+    return this.createHostedPagePayment(request);
+  }
+
+  /**
+   * Flow A — charge a card token returned by the PayTabs JavaScript SDK.
+   *
+   * The token is sent as `payment_token` in the request body.
+   * PayTabs processes it server-side and returns the result immediately.
+   */
+  private async createTokenPayment(request: PaymentRequest): Promise<PaymentResponse> {
     try {
       const cartId = `cart_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -88,9 +120,52 @@ export class PayTabsConnector {
         cart_currency: request.currency,
         cart_amount: request.amount,
         cart_description: request.description || 'Payment',
-        // callback: where PayTabs POSTs the payment result (our webhook endpoint)
+        // payment_token is the value returned by paylib.tokenise() on the frontend
+        payment_token: request.source!.token,
+        // callback still needed so PayTabs can notify us of async status changes
+        callback: process.env.PAYTABS_CALLBACK_URL || ''
+      };
+
+      if (request.metadata) {
+        payload.cart_extra = request.metadata;
+      }
+
+      const response = await this.client.post('/payment/request', payload);
+      const data = response.data;
+
+      logger.info('PayTabs token payment processed', { tran_ref: data.tran_ref, cart_id: cartId });
+
+      return this.mapPayTabsResponse(data);
+    } catch (error: any) {
+      logger.error('PayTabs createTokenPayment error:', {
+        status: error.response?.status,
+        response_code: error.response?.data?.payment_result?.response_code,
+        response_message: error.response?.data?.payment_result?.response_message,
+        message: error.message
+      });
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Flow B — request a hosted payment page (fallback when no token).
+   *
+   * Returns payment_url which the frontend must open for the customer
+   * to enter card details. Status is PENDING until the webhook arrives.
+   */
+  private async createHostedPagePayment(request: PaymentRequest): Promise<PaymentResponse> {
+    try {
+      const cartId = `cart_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      const payload: Record<string, any> = {
+        profile_id: this.profileId,
+        tran_type: 'sale',
+        tran_class: 'ecom',
+        cart_id: cartId,
+        cart_currency: request.currency,
+        cart_amount: request.amount,
+        cart_description: request.description || 'Payment',
         callback: process.env.PAYTABS_CALLBACK_URL || '',
-        // return: where PayTabs redirects the customer after they finish
         return: process.env.PAYTABS_RETURN_URL || request.callback_url || ''
       };
 
@@ -101,10 +176,7 @@ export class PayTabsConnector {
       const response = await this.client.post('/payment/request', payload);
       const data = response.data;
 
-      logger.info('PayTabs hosted page created', {
-        tran_ref: data.tran_ref,
-        cart_id: cartId
-      });
+      logger.info('PayTabs hosted page created', { tran_ref: data.tran_ref, cart_id: cartId });
 
       return {
         id: data.tran_ref,
@@ -115,11 +187,10 @@ export class PayTabsConnector {
         metadata: request.metadata,
         callback_url: request.callback_url,
         created_at: new Date().toISOString(),
-        // The client must redirect to this URL to complete payment
         payment_url: data.redirect_url
       };
     } catch (error: any) {
-      logger.error('PayTabs createPayment error:', {
+      logger.error('PayTabs createHostedPagePayment error:', {
         status: error.response?.status,
         response_code: error.response?.data?.payment_result?.response_code,
         response_message: error.response?.data?.payment_result?.response_message,

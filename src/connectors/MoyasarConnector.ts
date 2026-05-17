@@ -13,6 +13,25 @@ import { logger } from '../utils/logger';
 /**
  * Moyasar Payment Gateway Connector
  * Official API Docs: https://docs.moyasar.com/
+ *
+ * Token flow (unified checkout — recommended):
+ *  Frontend includes Moyasar JS SDK and renders its own card form.
+ *  The SDK tokenises the card client-side and returns a source token.
+ *  Frontend sends { source: { type: "creditcard", token: "TOKEN" } } to backend.
+ *  Backend charges the token via this connector — no card data touches our server.
+ *
+ *  Frontend setup:
+ *    <script src="https://cdn.moyasar.com/mpf/1.14.1/moyasar.js"></script>
+ *    Moyasar.init({
+ *      element: '.mysr-form',
+ *      amount: 10000,           // in halalas
+ *      currency: 'SAR',
+ *      description: 'Payment',
+ *      publishable_api_key: 'YOUR_PUBLISHABLE_KEY',
+ *      callback_url: 'https://your-backend.com/api/v1/payments',
+ *    });
+ *    // On success, Moyasar calls callback_url with ?token=TOKEN
+ *    // Extract the token and POST it as source.token to our /payments endpoint
  */
 export class MoyasarConnector {
   private client: AxiosInstance;
