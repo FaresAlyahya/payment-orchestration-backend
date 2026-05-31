@@ -15,7 +15,8 @@ export enum PaymentMethod {
   CREDITCARD = 'creditcard',
   MADA = 'mada',
   APPLEPAY = 'applepay',
-  STC_PAY = 'stcpay'
+  STC_PAY = 'stcpay',
+  TOKEN = 'token'
 }
 
 export enum PSPProvider {

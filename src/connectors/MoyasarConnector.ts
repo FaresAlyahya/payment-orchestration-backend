@@ -198,10 +198,11 @@ export class MoyasarConnector {
     // Add payment source (card details or token)
     if (request.source) {
       if (request.source.token) {
-        // Moyasar checkout tokens (from mysr.js) always require type:'creditcard'
-        // regardless of what the frontend sends in source.type
+        // Pass source.type and token through as-is — Moyasar accepts:
+        //   type:'token'      for saved card tokens (mToken)
+        //   type:'creditcard' for checkout form tokens (mysr.js)
         payload.source = {
-          type: 'creditcard',
+          type: request.source.type,
           token: request.source.token
         };
       } else if (request.source.number) {
