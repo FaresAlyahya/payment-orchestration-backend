@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import axios, { AxiosInstance } from 'axios';
 import {
   PaymentRequest,
@@ -262,6 +263,44 @@ export class PayTabsConnector {
 
   getProviderName(): PSPProvider {
     return PSPProvider.PAYTABS;
+  }
+
+  /**
+   * Verify the IPN hash that PayTabs attaches to every callback POST.
+   *
+   * Formula (all fields pipe-separated, SHA-256):
+   *   profile_id|tran_ref|cart_id|cart_currency|cart_amount|
+   *   tran_currency|tran_total|response_status|response_code|server_key
+   *
+   * @param payload  Parsed callback body (req.body)
+   * @param serverKey  PAYTABS_SERVER_KEY env var
+   */
+  static verifyCallbackHash(payload: any, serverKey: string): boolean {
+    const result = payload.payment_result ?? {};
+    const parts = [
+      String(payload.merchant_info?.profile_id ?? ''),
+      String(payload.tran_ref ?? ''),
+      String(payload.cart_id ?? ''),
+      String(payload.cart_currency ?? ''),
+      String(payload.cart_amount ?? ''),
+      String(payload.tran_currency ?? ''),
+      String(payload.tran_total ?? ''),
+      String(result.response_status ?? ''),
+      String(result.response_code ?? ''),
+      serverKey
+    ];
+    const expected = crypto
+      .createHash('sha256')
+      .update(parts.join('|'))
+      .digest('hex');
+
+    const received = String(result.hash ?? '');
+    // Constant-time comparison to prevent timing attacks
+    if (expected.length !== received.length) return false;
+    return crypto.timingSafeEqual(
+      Buffer.from(expected, 'hex'),
+      Buffer.from(received, 'hex')
+    );
   }
 
   // ---------------------------------------------------------------------------

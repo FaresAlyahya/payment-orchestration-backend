@@ -4,6 +4,7 @@ import { AppDataSource } from '../config/database';
 import { Transaction } from '../models/Transaction';
 import { Merchant } from '../models/Merchant';
 import { MoyasarConnector } from '../connectors/MoyasarConnector';
+import { PayTabsConnector } from '../connectors/PayTabsConnector';
 import { PaymentStatus } from '../types/payment.types';
 import { logger } from '../utils/logger';
 import { webhookQueue } from '../services/WebhookQueue';
@@ -117,30 +118,50 @@ export class WebhookController {
   }
 
   /**
-   * POST /webhooks/paytabs
+   * POST /api/v1/webhooks/paytabs
    *
-   * PayTabs POSTs the payment result to PAYTABS_CALLBACK_URL after the
-   * customer completes (or abandons) the hosted payment page.
+   * Server-to-server callback from PayTabs after the customer completes
+   * (or abandons) the hosted payment page. PayTabs POSTs JSON here.
    *
-   * Payload fields used:
-   *  tran_ref                        — PayTabs transaction reference (our psp_transaction_id)
-   *  payment_result.response_status  — A=Paid, D=Declined, E=Error, V=Voided
-   *  payment_result.response_message — human-readable result
-   *  cart_amount / cart_currency     — for refund amount comparison
+   * Verification steps:
+   *  1. Hash check  — payment_result.hash must match our computed SHA-256
+   *  2. profile_id  — must match PAYTABS_PROFILE_ID (belt-and-suspenders)
    *
-   * PayTabs does not send an HMAC signature by default on the callback. We
-   * verify by checking the profile_id matches our configured value, and
-   * optionally re-query PayTabs to confirm status before updating the DB.
+   * Status codes:
+   *  A = Authorised / Paid
+   *  H = On-Hold (authorised, capture pending)
+   *  P = Pending (customer hasn't paid yet — no DB change needed)
+   *  D = Declined
+   *  E = Error
+   *  V = Voided
    */
   handlePayTabsWebhook = async (req: Request, res: Response): Promise<void> => {
     try {
       const data = req.body;
+      const serverKey = process.env.PAYTABS_SERVER_KEY || '';
 
-      // Basic integrity check — reject if profile_id doesn't match ours
+      // ── 1. Hash verification ──────────────────────────────────────────────
+      if (!serverKey) {
+        logger.error('PAYTABS_SERVER_KEY not configured — cannot verify callback hash');
+        res.status(500).json({ error: 'Webhook verification not configured' });
+        return;
+      }
+
+      const hashValid = PayTabsConnector.verifyCallbackHash(data, serverKey);
+      if (!hashValid) {
+        logger.warn('PayTabs webhook: invalid hash — possible spoofing attempt', {
+          tran_ref: data.tran_ref
+        });
+        res.status(401).json({ error: 'Invalid signature' });
+        return;
+      }
+
+      // ── 2. Profile ID check ───────────────────────────────────────────────
       const expectedProfileId = parseInt(process.env.PAYTABS_PROFILE_ID || '0');
-      if (expectedProfileId && data.merchant_info?.profile_id !== expectedProfileId) {
-        logger.warn('PayTabs webhook profile_id mismatch', {
-          received: data.merchant_info?.profile_id,
+      const receivedProfileId = Number(data.merchant_info?.profile_id);
+      if (expectedProfileId && receivedProfileId !== expectedProfileId) {
+        logger.warn('PayTabs webhook: profile_id mismatch', {
+          received: receivedProfileId,
           expected: expectedProfileId
         });
         res.status(401).json({ error: 'Invalid profile_id' });
@@ -149,36 +170,73 @@ export class WebhookController {
 
       const tranRef: string = data.tran_ref;
       const responseStatus: string = data.payment_result?.response_status;
+      const responseMessage: string = data.payment_result?.response_message || '';
 
-      logger.info(`PayTabs webhook received: tran_ref=${tranRef} status=${responseStatus}`);
+      logger.info('PayTabs webhook verified', {
+        tran_ref: tranRef,
+        status: responseStatus,
+        message: responseMessage
+      });
 
+      // ── 3. Look up transaction ────────────────────────────────────────────
       const transaction = await this.transactionRepository.findOne({
         where: { psp_transaction_id: tranRef }
       });
 
       if (!transaction) {
+        // Acknowledge so PayTabs stops retrying — may be a race condition
         logger.warn(`PayTabs webhook: no transaction found for tran_ref=${tranRef}`);
-        res.status(200).json({ received: true }); // Acknowledge to stop retries
+        res.status(200).json({ received: true });
         return;
       }
 
-      if (responseStatus === 'A') {
-        transaction.status = PaymentStatus.PAID;
-        await this.transactionRepository.save(transaction);
-        logger.info(`Transaction ${transaction.id} marked as PAID via PayTabs`);
-        await this.notifyMerchant(transaction, 'payment.paid', data);
-      } else if (responseStatus === 'D' || responseStatus === 'E') {
-        transaction.status = PaymentStatus.FAILED;
-        transaction.error_message = data.payment_result?.response_message || 'Payment failed';
-        await this.transactionRepository.save(transaction);
-        logger.info(`Transaction ${transaction.id} marked as FAILED via PayTabs`);
-        await this.notifyMerchant(transaction, 'payment.failed', data);
-      } else if (responseStatus === 'V') {
-        transaction.status = PaymentStatus.VOIDED;
-        await this.transactionRepository.save(transaction);
-        logger.info(`Transaction ${transaction.id} marked as VOIDED via PayTabs`);
-      } else {
-        logger.info(`PayTabs webhook: unhandled status ${responseStatus} for tran_ref=${tranRef}`);
+      // ── 4. Update transaction status ──────────────────────────────────────
+      // Enrich card info if PayTabs sent it
+      const cardScheme: string = data.payment_info?.card_scheme || '';
+      const rawPan: string = data.payment_info?.payment_description || '';
+      const lastFour = rawPan.replace(/\D/g, '').slice(-4) || undefined;
+
+      switch (responseStatus) {
+        case 'A':
+          transaction.status = PaymentStatus.PAID;
+          if (cardScheme) transaction.card_brand = cardScheme;
+          if (lastFour) transaction.card_last_four = lastFour;
+          await this.transactionRepository.save(transaction);
+          logger.info(`Transaction ${transaction.id} → PAID via PayTabs`);
+          await this.notifyMerchant(transaction, 'payment.paid', data);
+          break;
+
+        case 'H':
+          transaction.status = PaymentStatus.AUTHORIZED;
+          if (cardScheme) transaction.card_brand = cardScheme;
+          if (lastFour) transaction.card_last_four = lastFour;
+          await this.transactionRepository.save(transaction);
+          logger.info(`Transaction ${transaction.id} → AUTHORIZED via PayTabs`);
+          await this.notifyMerchant(transaction, 'payment.authorized', data);
+          break;
+
+        case 'D':
+        case 'E':
+          transaction.status = PaymentStatus.FAILED;
+          transaction.error_message = responseMessage || 'Payment failed';
+          await this.transactionRepository.save(transaction);
+          logger.info(`Transaction ${transaction.id} → FAILED via PayTabs (${responseStatus})`);
+          await this.notifyMerchant(transaction, 'payment.failed', data);
+          break;
+
+        case 'V':
+          transaction.status = PaymentStatus.VOIDED;
+          await this.transactionRepository.save(transaction);
+          logger.info(`Transaction ${transaction.id} → VOIDED via PayTabs`);
+          break;
+
+        case 'P':
+          // Pending — customer hasn't completed payment yet; no DB change needed
+          logger.info(`PayTabs webhook: tran_ref=${tranRef} still pending`);
+          break;
+
+        default:
+          logger.warn(`PayTabs webhook: unhandled status '${responseStatus}' for tran_ref=${tranRef}`);
       }
 
       res.status(200).json({ received: true });
