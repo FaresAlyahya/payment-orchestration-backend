@@ -4,7 +4,6 @@ import { AppDataSource } from '../config/database';
 import { Merchant } from '../models/Merchant';
 import { logger } from '../utils/logger';
 
-// Extend Express Request type to include merchant
 declare global {
   namespace Express {
     interface Request {
@@ -14,18 +13,42 @@ declare global {
 }
 
 /**
- * Middleware to authenticate API requests using merchant API key.
+ * Extract the plaintext API key from the request.
+ * Checks (in order):
+ *   1. Authorization: Bearer <key>
+ *   2. x-api-key: <key>
+ */
+function extractApiKey(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const key = authHeader.substring(7).trim();
+    if (key) return key;
+  }
+
+  const xApiKey = req.headers['x-api-key'];
+  if (xApiKey && typeof xApiKey === 'string' && xApiKey.trim()) {
+    return xApiKey.trim();
+  }
+
+  return null;
+}
+
+/**
+ * Authenticate incoming requests by comparing the provided plaintext API key
+ * against the bcrypt hash stored in merchants.api_key.
  *
- * Authentication flow:
- *  1. Extract API key from `Authorization: Bearer <key>` header.
- *  2. Load all merchants and use bcrypt.compare() to find a matching api_key hash.
- *  3. Reject if the key has expired (api_key_expires_at in the past).
- *  4. Reject if the merchant account is inactive.
- *  5. Attach the merchant object to req.merchant for downstream handlers.
+ * IMPORTANT — bcrypt rules:
+ *  - NEVER compare the plaintext key directly to the stored value (strings differ)
+ *  - NEVER hash the incoming key and compare strings (salted hashes are unique)
+ *  - ALWAYS use bcrypt.compare(plaintext, hash) which handles the salt internally
  *
- * NOTE: This performs a full-table scan with a bcrypt comparison per row.
- * This is only acceptable for a small number of merchants. Add an api_key_prefix
- * indexed column for fast lookup when merchant count grows.
+ * Flow:
+ *  1. Extract plaintext key from Authorization: Bearer or x-api-key header
+ *  2. Load all active merchants from DB
+ *  3. bcrypt.compare(incomingKey, merchant.api_key) for each until a match
+ *  4. Reject if key expired or merchant inactive
+ *  5. Reject if request IP not in allowed_ips (when list is set)
+ *  6. Attach matched merchant to req.merchant
  */
 export const authenticateApiKey = async (
   req: Request,
@@ -33,79 +56,103 @@ export const authenticateApiKey = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    // Extract key from Authorization header
-    const authHeader = req.headers.authorization;
+    const apiKey = extractApiKey(req);
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    // --- DEBUG: key reception ---
+    logger.info('[auth] Incoming key check', {
+      key_received: !!apiKey,
+      key_length: apiKey?.length ?? 0,
+      key_prefix: apiKey ? apiKey.substring(0, 12) + '...' : 'NONE',
+      source: req.headers.authorization ? 'Authorization header' : 'x-api-key header',
+      request_id: req.requestId
+    });
+
+    if (!apiKey) {
       res.status(401).json({
         error: 'Unauthorized',
-        message: 'Missing or invalid API key. Use: Authorization: Bearer YOUR_API_KEY'
+        message: 'Missing API key. Send via Authorization: Bearer <key> or x-api-key header.'
       });
       return;
     }
 
-    const apiKey = authHeader.substring(7); // Remove 'Bearer ' prefix
-
-    // DEBUG: log only the first 8 chars — enough to identify the key without exposing it
-    logger.info('[auth] Key prefix received', {
-      key_prefix: apiKey.substring(0, 8),
-      request_id: req.requestId
-    });
-
+    // Load only active merchants to skip inactive ones early
     const merchantRepository = AppDataSource.getRepository(Merchant);
-    const allMerchants = await merchantRepository.find();
+    const activeMerchants = await merchantRepository.find({
+      where: { active: true }
+    });
 
-    logger.info('[auth] Merchants loaded from DB', {
-      count: allMerchants.length,
+    // --- DEBUG: merchant count ---
+    logger.info('[auth] Active merchants loaded', {
+      count: activeMerchants.length,
       request_id: req.requestId
     });
 
-    // Find the merchant whose stored bcrypt hash matches the provided key.
-    // bcrypt.compare is intentionally slow — avoid calling it in a loop for
-    // large datasets. Use an api_key_prefix index column when scaling up.
+    if (activeMerchants.length === 0) {
+      logger.warn('[auth] No active merchants in database', { request_id: req.requestId });
+      res.status(401).json({ error: 'Unauthorized', message: 'Invalid API key' });
+      return;
+    }
+
+    // Find the merchant whose stored bcrypt hash matches the incoming plaintext key.
+    // bcrypt.compare handles the salt automatically — do not pre-hash the key.
     let matchedMerchant: Merchant | null = null;
-    for (const candidate of allMerchants) {
+
+    for (const candidate of activeMerchants) {
       let isMatch = false;
+      const hashPrefix = candidate.api_key?.substring(0, 7) ?? 'MISSING';
+
       try {
+        // Validate that the stored value looks like a bcrypt hash before comparing
+        if (!candidate.api_key || !candidate.api_key.startsWith('$2')) {
+          logger.warn('[auth] Merchant has non-bcrypt api_key value — skipping', {
+            merchant_id: candidate.id,
+            hash_prefix: hashPrefix,
+            request_id: req.requestId
+          });
+          continue;
+        }
+
         isMatch = await bcrypt.compare(apiKey, candidate.api_key);
       } catch (bcryptErr: any) {
-        logger.error('[auth] bcrypt.compare threw an error', {
+        logger.error('[auth] bcrypt.compare error', {
           merchant_id: candidate.id,
+          hash_prefix: hashPrefix,
           error: bcryptErr.message,
           request_id: req.requestId
         });
+        continue;
       }
+
+      // --- DEBUG: per-candidate compare result ---
       logger.info('[auth] bcrypt.compare result', {
         merchant_id: candidate.id,
+        hash_prefix: hashPrefix,   // e.g. "$2b$12$" — confirms cost factor
         matched: isMatch,
-        hash_prefix: candidate.api_key.substring(0, 7), // shows e.g. "$2b$10$"
         request_id: req.requestId
       });
+
       if (isMatch) {
         matchedMerchant = candidate;
         break;
       }
     }
 
-    // Timing-attack protection: if no merchant found, run one dummy bcrypt
-    // comparison so the response time doesn't reveal whether the prefix exists.
+    // Timing-attack guard: always do one dummy compare when no match found
     if (!matchedMerchant) {
       const dummyHash = '$2b$12$invalidhashfortimingprotectiononly000000000000000000000';
       await bcrypt.compare(apiKey, dummyHash).catch(() => {});
 
-      logger.info('[auth] No matching merchant found', { request_id: req.requestId });
-
-      logger.warn('Invalid API key attempt', { request_id: req.requestId });
-      res.status(401).json({
-        error: 'Unauthorized',
-        message: 'Invalid API key'
+      logger.warn('[auth] No matching merchant — returning 401', {
+        active_merchants_checked: activeMerchants.length,
+        request_id: req.requestId
       });
+      res.status(401).json({ error: 'Unauthorized', message: 'Invalid API key' });
       return;
     }
 
     // Reject expired keys
     if (matchedMerchant.api_key_expires_at && matchedMerchant.api_key_expires_at < new Date()) {
-      logger.warn('Expired API key attempt', {
+      logger.warn('[auth] Expired API key', {
         merchant_id: matchedMerchant.id,
         expired_at: matchedMerchant.api_key_expires_at,
         request_id: req.requestId
@@ -117,22 +164,24 @@ export const authenticateApiKey = async (
       return;
     }
 
-    if (!matchedMerchant.active) {
-      logger.warn('Inactive merchant attempt', {
-        merchant_id: matchedMerchant.id,
-        request_id: req.requestId
-      });
-      res.status(403).json({
-        error: 'Forbidden',
-        message: 'Merchant account is inactive'
-      });
-      return;
+    // IP whitelist — only enforced when allowed_ips is a non-empty array
+    const allowedIps: string[] | null = matchedMerchant.allowed_ips ?? null;
+    if (allowedIps && allowedIps.length > 0) {
+      const clientIp = req.ip || req.socket?.remoteAddress || '';
+      if (!allowedIps.includes(clientIp)) {
+        logger.warn('[auth] IP not in whitelist', {
+          merchant_id: matchedMerchant.id,
+          client_ip: clientIp.replace(/\d+$/, '***'),
+          request_id: req.requestId
+        });
+        res.status(403).json({ error: 'Forbidden', message: 'IP address not authorised.' });
+        return;
+      }
     }
 
-    // Attach merchant to request for downstream use
     req.merchant = matchedMerchant;
 
-    logger.info('API request authenticated', {
+    logger.info('[auth] Authenticated successfully', {
       merchant_id: matchedMerchant.id,
       merchant_name: matchedMerchant.name,
       request_id: req.requestId
@@ -140,10 +189,10 @@ export const authenticateApiKey = async (
 
     next();
   } catch (error) {
-    logger.error('Authentication error:', { error, request_id: req.requestId });
-    res.status(500).json({
-      error: 'Internal Server Error',
-      message: 'Authentication failed'
+    logger.error('[auth] Unexpected authentication error', {
+      error,
+      request_id: req.requestId
     });
+    res.status(500).json({ error: 'Internal Server Error', message: 'Authentication failed' });
   }
 };
