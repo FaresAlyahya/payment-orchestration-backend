@@ -35,8 +35,12 @@ router.post(
   [
     body('amount').isNumeric().withMessage('Amount must be a number'),
     body('currency').isIn(['SAR', 'USD', 'AED']).withMessage('Invalid currency'),
+    body('psp').optional().isIn(['moyasar', 'paytabs']).withMessage('Invalid PSP — use moyasar or paytabs'),
     body('description').optional().isString(),
     body('source').optional().isObject(),
+    body('source.type').optional().isString(),
+    body('source.token').optional().isString(),
+    body('callback_url').optional().isURL().withMessage('callback_url must be a valid URL'),
     body('metadata').optional().isObject()
   ],
   paymentController.createPayment

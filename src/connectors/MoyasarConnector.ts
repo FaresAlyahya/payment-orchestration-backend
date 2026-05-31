@@ -98,11 +98,15 @@ export class MoyasarConnector {
       
       return this.mapMoyasarResponse(response.data);
     } catch (error: any) {
-      // Do NOT log the request payload — it contains card numbers / CVC
+      // Do NOT log the request payload — it may contain card/token data
       logger.error('Moyasar createPayment error:', {
         status: error.response?.status,
         error_type: error.response?.data?.type,
         error_message: error.response?.data?.message,
+        // Log field-level validation errors if present (no card data in these)
+        errors: error.response?.data?.errors
+          ? JSON.stringify(error.response.data.errors)
+          : undefined,
         message: error.message
       });
       throw this.handleError(error);
@@ -194,9 +198,10 @@ export class MoyasarConnector {
     // Add payment source (card details or token)
     if (request.source) {
       if (request.source.token) {
-        // Use saved card token
+        // Moyasar checkout tokens (from mysr.js) always require type:'creditcard'
+        // regardless of what the frontend sends in source.type
         payload.source = {
-          type: 'token',
+          type: 'creditcard',
           token: request.source.token
         };
       } else if (request.source.number) {

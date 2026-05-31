@@ -17,10 +17,31 @@ export class PaymentController {
    */
   createPayment = async (req: Request, res: Response): Promise<void> => {
     try {
+      // Log incoming request shape (never log token/card values)
+      logger.info('[payments] incoming request', {
+        has_auth: !!req.headers.authorization,
+        has_api_key: !!req.headers['x-api-key'],
+        body_keys: Object.keys(req.body || {}),
+        psp: req.body?.psp,
+        currency: req.body?.currency,
+        amount: req.body?.amount,
+        source_type: req.body?.source?.type,
+        has_token: !!req.body?.source?.token,
+        request_id: req.requestId
+      });
+
       // Validate request
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        res.status(400).json({ errors: errors.array() });
+        logger.warn('[payments] validation failed', {
+          errors: errors.array(),
+          request_id: req.requestId
+        });
+        res.status(400).json({
+          success: false,
+          message: 'Data validation failed',
+          errors: errors.array()
+        });
         return;
       }
 
