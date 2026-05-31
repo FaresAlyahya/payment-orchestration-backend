@@ -27,6 +27,7 @@ export class PaymentController {
         amount: req.body?.amount,
         source_type: req.body?.source?.type,
         has_token: !!req.body?.source?.token,
+        callback_url: req.body?.callback_url || 'MISSING',
         request_id: req.requestId
       });
 

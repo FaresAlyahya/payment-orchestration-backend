@@ -194,6 +194,15 @@ export class MoyasarConnector {
       process.env.MOYASAR_CALLBACK_URL ||
       `${process.env.FRONTEND_URL || 'https://flowpay-test.lovable.app'}/payment-result`;
 
+    logger.info('[moyasar] buildPaymentPayload', {
+      callback_url_source: request.callback_url ? 'request' : process.env.MOYASAR_CALLBACK_URL ? 'env' : 'hardcoded',
+      callback_url: callbackUrl,
+      amount_halalas: Math.round(request.amount * 100),
+      currency: request.currency,
+      source_type: request.source?.type,
+      has_token: !!request.source?.token
+    });
+
     const payload: any = {
       amount: Math.round(request.amount * 100), // Convert to halalas (SAR smallest unit)
       currency: request.currency,
