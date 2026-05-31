@@ -254,6 +254,12 @@ export class MoyasarConnector {
     // Extract only the last 4 digits from whatever masked format Moyasar returns
     const lastFour = rawNumber ? rawNumber.replace(/\D/g, '').slice(-4) : undefined;
 
+    // When Moyasar requires 3DS, status is 'initiated' and the verification URL
+    // is in source.verification_url — map it to payment_url so the frontend
+    // knows where to redirect the customer.
+    const verificationUrl: string | undefined =
+      moyasarPayment.source?.verification_url ?? undefined;
+
     return {
       id: moyasarPayment.id,
       status: this.mapStatus(moyasarPayment.status),
@@ -275,7 +281,8 @@ export class MoyasarConnector {
       updated_at: moyasarPayment.updated_at,
       description: moyasarPayment.description,
       metadata: moyasarPayment.metadata,
-      callback_url: moyasarPayment.callback_url
+      callback_url: moyasarPayment.callback_url,
+      payment_url: verificationUrl
     };
   }
 

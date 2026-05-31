@@ -52,11 +52,20 @@ export class PaymentController {
       // Create payment
       const payment = await this.paymentService.createPayment(merchantId, paymentRequest);
 
-      logger.info(`Payment created: ${payment.id} for merchant ${merchantId}`);
+      logger.info(`Payment created: ${payment.id} for merchant ${merchantId}`, {
+        railway_id: payment.id,
+        status: payment.status,
+        has_payment_url: !!payment.payment_url
+      });
 
       res.status(201).json({
         success: true,
-        data: payment
+        data: {
+          ...payment,
+          // Explicit alias so the frontend always knows which ID to use for
+          // subsequent GET /payments/{id} calls — even after a 3DS redirect
+          railway_payment_id: payment.id
+        }
       });
     } catch (error: any) {
       logger.error('Error in createPayment controller:', {

@@ -118,8 +118,14 @@ export class PaymentService {
    */
   async getPayment(transactionId: string): Promise<PaymentResponse> {
     try {
+      // Accept either our Railway UUID or the PSP's own transaction ID.
+      // This lets the frontend use the Moyasar callback ?id= param directly
+      // without having to store our internal ID separately.
       const transaction = await this.transactionRepository.findOne({
-        where: { id: transactionId }
+        where: [
+          { id: transactionId },
+          { psp_transaction_id: transactionId }
+        ]
       });
 
       if (!transaction) {
