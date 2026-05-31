@@ -188,11 +188,17 @@ export class MoyasarConnector {
    * Build Moyasar API payload from our unified format
    */
   private buildPaymentPayload(request: PaymentRequest): any {
+    // callback_url is required by Moyasar — fall back to env var if not in the request
+    const callbackUrl =
+      request.callback_url ||
+      process.env.MOYASAR_CALLBACK_URL ||
+      `${process.env.FRONTEND_URL || 'https://flowpay-test.lovable.app'}/payment-result`;
+
     const payload: any = {
       amount: Math.round(request.amount * 100), // Convert to halalas (SAR smallest unit)
       currency: request.currency,
       description: request.description || 'Payment',
-      callback_url: request.callback_url
+      callback_url: callbackUrl
     };
 
     // Add payment source (card details or token)
