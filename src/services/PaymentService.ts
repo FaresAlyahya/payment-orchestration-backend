@@ -19,13 +19,31 @@ export class PaymentService {
   private payTabsConnector: PayTabsConnector;
 
   constructor() {
+    const moyasarKey = process.env.MOYASAR_API_KEY || '';
+    const paytabsKey = process.env.PAYTABS_SERVER_KEY || '';
+
+    // Startup diagnostic — confirms PSP credentials are loaded (never logs full keys)
+    logger.info('[psp-init] Moyasar key loaded', {
+      present: !!moyasarKey,
+      length: moyasarKey.length,
+      prefix: moyasarKey ? moyasarKey.substring(0, 10) + '...' : 'MISSING',
+      expected_format: moyasarKey.startsWith('sk_test_') || moyasarKey.startsWith('sk_live_') ? 'OK' : 'WARNING: expected sk_test_ or sk_live_ prefix'
+    });
+
+    logger.info('[psp-init] PayTabs key loaded', {
+      present: !!paytabsKey,
+      length: paytabsKey.length,
+      prefix: paytabsKey ? paytabsKey.substring(0, 8) + '...' : 'MISSING',
+      profile_id: process.env.PAYTABS_PROFILE_ID || 'MISSING'
+    });
+
     this.moyasarConnector = new MoyasarConnector(
-      process.env.MOYASAR_API_KEY || '',
+      moyasarKey,
       process.env.MOYASAR_API_URL || 'https://api.moyasar.com/v1'
     );
 
     this.payTabsConnector = new PayTabsConnector(
-      process.env.PAYTABS_SERVER_KEY || '',
+      paytabsKey,
       parseInt(process.env.PAYTABS_PROFILE_ID || '0'),
       process.env.PAYTABS_API_URL || 'https://secure.paytabs.sa'
     );
