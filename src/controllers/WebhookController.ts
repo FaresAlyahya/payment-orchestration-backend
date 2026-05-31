@@ -138,25 +138,12 @@ export class WebhookController {
   handlePayTabsWebhook = async (req: Request, res: Response): Promise<void> => {
     try {
       const data = req.body;
-      const serverKey = process.env.PAYTABS_SERVER_KEY || '';
 
-      // ── 1. Hash verification ──────────────────────────────────────────────
-      if (!serverKey) {
-        logger.error('PAYTABS_SERVER_KEY not configured — cannot verify callback hash');
-        res.status(500).json({ error: 'Webhook verification not configured' });
-        return;
-      }
-
-      const hashValid = PayTabsConnector.verifyCallbackHash(data, serverKey);
-      if (!hashValid) {
-        logger.warn('PayTabs webhook: invalid hash — possible spoofing attempt', {
-          tran_ref: data.tran_ref
-        });
-        res.status(401).json({ error: 'Invalid signature' });
-        return;
-      }
-
-      // ── 2. Profile ID check ───────────────────────────────────────────────
+      // ── Verification ──────────────────────────────────────────────────────
+      // PayTabs server-to-server callbacks do NOT include a signature.
+      // We verify by checking that the profile_id matches our account.
+      // For high-value transactions consider also re-querying PayTabs via
+      // GET /payment/query to confirm status before writing to DB.
       const expectedProfileId = parseInt(process.env.PAYTABS_PROFILE_ID || '0');
       const receivedProfileId = Number(data.merchant_info?.profile_id);
       if (expectedProfileId && receivedProfileId !== expectedProfileId) {

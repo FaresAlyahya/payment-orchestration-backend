@@ -123,8 +123,10 @@ export class PayTabsConnector {
         cart_description: request.description || 'Payment',
         // payment_token is the value returned by paylib.tokenise() on the frontend
         payment_token: request.source!.token,
-        // callback still needed so PayTabs can notify us of async status changes
-        callback: process.env.PAYTABS_CALLBACK_URL || ''
+        // callback: server-to-server JSON after payment completes
+        callback: process.env.PAYTABS_CALLBACK_URL || '',
+        // return: browser redirect after 3DS (required even for token flow)
+        return: process.env.PAYTABS_RETURN_URL || 'https://flowpay-test.lovable.app/payment-result'
       };
 
       if (request.metadata) {
@@ -266,40 +268,42 @@ export class PayTabsConnector {
   }
 
   /**
-   * Verify the IPN hash that PayTabs attaches to every callback POST.
+   * Verify the signature on the PayTabs browser return URL.
    *
-   * Formula (all fields pipe-separated, SHA-256):
-   *   profile_id|tran_ref|cart_id|cart_currency|cart_amount|
-   *   tran_currency|tran_total|response_status|response_code|server_key
+   * PayTabs POSTs form fields to the return URL including a `signature` field.
+   * Per the PayTabs docs, the signature is:
+   *   HMAC-SHA256(url_encoded_sorted_fields_excluding_signature, serverKey)
    *
-   * @param payload  Parsed callback body (req.body)
+   * NOTE: This is for the RETURN (browser redirect), NOT the server callback.
+   * The server-to-server callback has NO signature — verify it by re-querying
+   * PayTabs or by checking profile_id.
+   *
+   * @param fields     All POST fields from the return request (req.body)
    * @param serverKey  PAYTABS_SERVER_KEY env var
    */
-  static verifyCallbackHash(payload: any, serverKey: string): boolean {
-    const result = payload.payment_result ?? {};
-    const parts = [
-      String(payload.merchant_info?.profile_id ?? ''),
-      String(payload.tran_ref ?? ''),
-      String(payload.cart_id ?? ''),
-      String(payload.cart_currency ?? ''),
-      String(payload.cart_amount ?? ''),
-      String(payload.tran_currency ?? ''),
-      String(payload.tran_total ?? ''),
-      String(result.response_status ?? ''),
-      String(result.response_code ?? ''),
-      serverKey
-    ];
+  static verifyReturnSignature(fields: Record<string, string>, serverKey: string): boolean {
+    const receivedSignature = fields.signature;
+    if (!receivedSignature) return false;
+
+    // Remove signature, filter empty values, sort keys, URL-encode
+    const { signature: _sig, ...rest } = fields;
+    const filtered = Object.fromEntries(
+      Object.entries(rest).filter(([, v]) => v !== '' && v !== undefined && v !== null)
+    );
+    const sortedKeys = Object.keys(filtered).sort();
+    const queryString = sortedKeys
+      .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(filtered[k])}`)
+      .join('&');
+
     const expected = crypto
-      .createHash('sha256')
-      .update(parts.join('|'))
+      .createHmac('sha256', serverKey)
+      .update(queryString)
       .digest('hex');
 
-    const received = String(result.hash ?? '');
-    // Constant-time comparison to prevent timing attacks
-    if (expected.length !== received.length) return false;
+    if (expected.length !== receivedSignature.length) return false;
     return crypto.timingSafeEqual(
-      Buffer.from(expected, 'hex'),
-      Buffer.from(received, 'hex')
+      Buffer.from(expected),
+      Buffer.from(receivedSignature)
     );
   }
 
@@ -308,6 +312,22 @@ export class PayTabsConnector {
   // ---------------------------------------------------------------------------
 
   private mapPayTabsResponse(data: any): PaymentResponse {
+    // 3DS redirect case — PayTabs needs the customer to complete authentication.
+    // No payment_result yet; only redirect_url is returned.
+    if (data.redirect_url && !data.payment_result?.response_status) {
+      return {
+        id: data.tran_ref,
+        status: PaymentStatus.PENDING,
+        amount: parseFloat(data.cart_amount ?? '0'),
+        currency: (data.cart_currency as Currency) || Currency.SAR,
+        created_at: new Date().toISOString(),
+        description: data.cart_description,
+        metadata: data.cart_extra,
+        payment_url: data.redirect_url
+      };
+    }
+
+    // Direct result — payment completed (approved, declined, or error)
     const rawPan: string | undefined = data.payment_info?.payment_description;
     const lastFour = rawPan ? rawPan.replace(/\D/g, '').slice(-4) : undefined;
 
