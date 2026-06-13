@@ -3,6 +3,7 @@ import { PaymentController } from '../controllers/PaymentController';
 import { WebhookController } from '../controllers/WebhookController';
 import { AnalyticsController } from '../controllers/AnalyticsController';
 import { MerchantController } from '../controllers/MerchantController';
+import { RoutingController } from '../controllers/RoutingController';
 import { authenticateApiKey } from '../middleware/auth';
 import { ipWhitelistMiddleware } from '../middleware/ipWhitelist';
 import { paymentsLimiter, analyticsLimiter } from '../middleware/rateLimiter';
@@ -13,6 +14,7 @@ const paymentController = new PaymentController();
 const webhookController = new WebhookController();
 const analyticsController = new AnalyticsController();
 const merchantController = new MerchantController();
+const routingController = new RoutingController();
 
 // ---------------------------------------------------------------------------
 // Shared middleware chain for authenticated merchant routes
@@ -94,6 +96,15 @@ router.post(
   ...merchantAuth,
   merchantController.rotateApiKey
 );
+
+/**
+ * Routing Rules (protected)
+ */
+router.get('/routing-rules', ...merchantAuth, routingController.listRules);
+router.post('/routing-rules', ...merchantAuth, routingController.createRule);
+router.post('/routing-rules/simulate', ...merchantAuth, routingController.simulateRouting);
+router.put('/routing-rules/:id', ...merchantAuth, routingController.updateRule);
+router.delete('/routing-rules/:id', ...merchantAuth, routingController.deleteRule);
 
 /**
  * Webhook Routes (public — no API key auth, verified per-PSP)

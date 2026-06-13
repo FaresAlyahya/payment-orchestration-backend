@@ -2,6 +2,7 @@ import { AppDataSource } from '../config/database';
 import { Transaction } from '../models/Transaction';
 import { MoyasarConnector } from '../connectors/MoyasarConnector';
 import { PayTabsConnector } from '../connectors/PayTabsConnector';
+import { RoutingService } from './RoutingService';
 import {
   PaymentRequest,
   PaymentResponse,
@@ -17,6 +18,7 @@ export class PaymentService {
   private transactionRepository = AppDataSource.getRepository(Transaction);
   private moyasarConnector: MoyasarConnector;
   private payTabsConnector: PayTabsConnector;
+  private routingService = new RoutingService();
 
   constructor() {
     const moyasarKey = process.env.MOYASAR_API_KEY || '';
@@ -206,28 +208,8 @@ export class PaymentService {
     }
   }
 
-  /**
-   * Select which PSP to route this payment through.
-   *
-   * Priority:
-   *  1. Explicit `psp` field in the request — merchant forces a specific provider
-   *  2. Card-type rules (Mada → Moyasar)
-   *  3. Default fallback (Moyasar)
-   */
   private async selectPSP(request: PaymentRequest): Promise<PSPProvider> {
-    // 1. Honour explicit PSP override
-    if (request.psp) {
-      logger.info(`PSP override requested: ${request.psp}`);
-      return request.psp;
-    }
-
-    // 2. Card-type routing rules
-    if (request.source?.type === 'mada') {
-      return PSPProvider.MOYASAR;
-    }
-
-    // 3. Default
-    return PSPProvider.MOYASAR;
+    return this.routingService.selectPSP(request);
   }
 
   /**
