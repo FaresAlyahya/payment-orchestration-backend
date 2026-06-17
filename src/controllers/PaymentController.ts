@@ -115,6 +115,8 @@ export class PaymentController {
         currency,
         description: description || 'Payment',
         psp,
+        // Forward callback_url added by payment-proxy (or sent directly by the client)
+        callback_url: req.body.callback_url,
         source: {
           type: PaymentMethod.TOKEN,
           token
