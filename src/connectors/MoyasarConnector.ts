@@ -193,7 +193,7 @@ export class MoyasarConnector {
     const callbackUrl =
       (request.callback_url ?? '').trim() ||
       env('MOYASAR_CALLBACK_URL') ||
-      'https://flowpay-test.lovable.app/payment-result';
+      'https://payorch.dev/auth';
 
     logger.info('[moyasar] buildPaymentPayload', {
       callback_url: callbackUrl,

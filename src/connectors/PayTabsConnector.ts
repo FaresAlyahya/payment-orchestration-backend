@@ -126,7 +126,7 @@ export class PayTabsConnector {
         // callback: server-to-server JSON after payment completes
         callback: process.env.PAYTABS_CALLBACK_URL || '',
         // return: browser redirect after 3DS (required even for token flow)
-        return: process.env.PAYTABS_RETURN_URL || 'https://flowpay-test.lovable.app/payment-result'
+        return: process.env.PAYTABS_RETURN_URL || 'https://payorch.dev/auth'
       };
 
       // Include customer details if provided — improves 3DS success rate
