@@ -129,8 +129,14 @@ export class PayTabsConnector {
         return: process.env.PAYTABS_RETURN_URL || 'https://flowpay-test.lovable.app/payment-result'
       };
 
+      // Include customer details if provided — improves 3DS success rate
+      if (request.metadata?.customer) {
+        payload.customer_details = request.metadata.customer;
+      }
+
       if (request.metadata) {
-        payload.cart_extra = request.metadata;
+        const { customer: _c, ...rest } = request.metadata;
+        if (Object.keys(rest).length > 0) payload.cart_extra = rest;
       }
 
       const response = await this.client.post('/payment/request', payload);

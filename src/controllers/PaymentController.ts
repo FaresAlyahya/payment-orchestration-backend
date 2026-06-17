@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { PaymentService } from '../services/PaymentService';
-import { PaymentRequest, RefundRequest } from '../types/payment.types';
+import { PaymentRequest, RefundRequest, PaymentMethod } from '../types/payment.types';
 import { logger } from '../utils/logger';
 import { validationResult } from 'express-validator';
 
@@ -76,6 +76,77 @@ export class PaymentController {
         success: false,
         error: 'Failed to create payment',
         message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  };
+
+  /**
+   * POST /api/v1/payments/charge
+   * White-label direct charge — token from paylib.js (PayTabs) or mysr.js (Moyasar)
+   * is sent server-to-server to the PSP. No hosted page redirect.
+   *
+   * Response always includes:
+   *   railway_payment_id  — use this for status polling
+   *   status              — paid | failed | pending
+   *   verification_url    — present only when PSP requires 3DS; open in iframe/modal
+   */
+  chargePayment = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() });
+        return;
+      }
+
+      const merchantId = req.merchant!.id;
+      const { amount, currency, description, psp, token, customer, metadata } = req.body;
+
+      logger.info('[charge] incoming request', {
+        psp,
+        currency,
+        amount,
+        has_token: !!token,
+        has_customer: !!customer,
+        request_id: req.requestId
+      });
+
+      const paymentRequest: PaymentRequest = {
+        amount,
+        currency,
+        description: description || 'Payment',
+        psp,
+        source: {
+          type: PaymentMethod.TOKEN,
+          token
+        },
+        metadata: { ...metadata, customer }
+      };
+
+      const payment = await this.paymentService.createPayment(merchantId, paymentRequest);
+
+      logger.info('[charge] payment result', {
+        railway_id: payment.id,
+        status: payment.status,
+        has_verification_url: !!payment.payment_url,
+        request_id: req.requestId
+      });
+
+      res.status(201).json({
+        success: true,
+        data: {
+          railway_payment_id: payment.id,
+          status: payment.status,
+          amount: payment.amount,
+          currency: payment.currency,
+          // null when no 3DS needed; open in iframe/modal when present
+          verification_url: payment.payment_url ?? null
+        }
+      });
+    } catch (error: any) {
+      logger.error('[charge] error:', { message: error.message, request_id: req.requestId });
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Charge failed'
       });
     }
   };

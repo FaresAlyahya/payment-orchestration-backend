@@ -29,7 +29,24 @@ const merchantAuth = [authenticateApiKey, ipWhitelistMiddleware];
  * Payment Routes (protected)
  */
 
-// Create payment
+// White-label direct charge (own form / paylib.js / mysr.js token)
+router.post(
+  '/payments/charge',
+  ...merchantAuth,
+  paymentsLimiter,
+  [
+    body('amount').isNumeric().withMessage('amount is required'),
+    body('currency').isIn(['SAR', 'USD', 'AED']).withMessage('Invalid currency'),
+    body('psp').isIn(['moyasar', 'paytabs']).withMessage('psp is required: moyasar or paytabs'),
+    body('token').notEmpty().withMessage('token is required (from paylib.js or mysr.js)'),
+    body('description').optional().isString(),
+    body('customer').optional().isObject(),
+    body('metadata').optional().isObject()
+  ],
+  paymentController.chargePayment
+);
+
+// Create payment (smart routing — token optional, may return redirect for hosted page)
 router.post(
   '/payments',
   ...merchantAuth,
