@@ -188,14 +188,24 @@ export class MoyasarConnector {
    * Build Moyasar API payload from our unified format
    */
   private buildPaymentPayload(request: PaymentRequest): any {
-    // callback_url is required by Moyasar — fall back to env var if not in the request
+    // callback_url is required by Moyasar.
+    // Trim each candidate so empty/whitespace Railway env vars are skipped.
     const callbackUrl =
-      request.callback_url ||
-      process.env.MOYASAR_CALLBACK_URL ||
-      `${process.env.FRONTEND_URL || 'https://flowpay-test.lovable.app'}/payment-result`;
+      request.callback_url?.trim() ||
+      process.env.MOYASAR_CALLBACK_URL?.trim() ||
+      process.env.FRONTEND_URL?.trim()?.replace(/\/$/, '') + '/payment-result' ||
+      'https://flowpay-test.lovable.app/payment-result';
+
+    const callbackSource = request.callback_url?.trim()
+      ? 'request'
+      : process.env.MOYASAR_CALLBACK_URL?.trim()
+        ? 'MOYASAR_CALLBACK_URL'
+        : process.env.FRONTEND_URL?.trim()
+          ? 'FRONTEND_URL'
+          : 'hardcoded';
 
     logger.info('[moyasar] buildPaymentPayload', {
-      callback_url_source: request.callback_url ? 'request' : process.env.MOYASAR_CALLBACK_URL ? 'env' : 'hardcoded',
+      callback_url_source: callbackSource,
       callback_url: callbackUrl,
       amount_halalas: Math.round(request.amount * 100),
       currency: request.currency,
